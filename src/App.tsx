@@ -9,7 +9,8 @@ function App() {
   const [audioUnlocked, setAudioUnlocked] = useState(false);
   const [audioTested, setAudioTested] = useState(false);
   const intervalRef = useRef<number | null>(null);
-  const audioContextRef = useRef<AudioContext | null>(null);
+  const tickAudioRef = useRef<HTMLAudioElement | null>(null);
+  const explosionAudioRef = useRef<HTMLAudioElement | null>(null);
 
   const timePresets = [
     { label: "5s", seconds: 5 },
@@ -55,76 +56,137 @@ function App() {
     setPrevTimeLeft(timeLeft);
   }, [timeLeft]);
 
-  // More aggressive audio unlock for iPad
+  // Create audio data URLs for iPad compatibility
+  const createAudioDataURL = (frequency: number, duration: number, volume: number = 0.1) => {
+    const sampleRate = 8000; // Lower sample rate for smaller data
+    const samples = Math.floor(sampleRate * duration);
+    const buffer = new ArrayBuffer(44 + samples * 2); // WAV header + data
+    const view = new DataView(buffer);
+    
+    // WAV header
+    const writeString = (offset: number, string: string) => {
+      for (let i = 0; i < string.length; i++) {
+        view.setUint8(offset + i, string.charCodeAt(i));
+      }
+    };
+    
+    writeString(0, 'RIFF');
+    view.setUint32(4, buffer.byteLength - 8, true);
+    writeString(8, 'WAVE');
+    writeString(12, 'fmt ');
+    view.setUint32(16, 16, true);
+    view.setUint16(20, 1, true);
+    view.setUint16(22, 1, true);
+    view.setUint32(24, sampleRate, true);
+    view.setUint32(28, sampleRate * 2, true);
+    view.setUint16(32, 2, true);
+    view.setUint16(34, 16, true);
+    writeString(36, 'data');
+    view.setUint32(40, samples * 2, true);
+    
+    // Audio data
+    for (let i = 0; i < samples; i++) {
+      const t = i / sampleRate;
+      const sample = Math.sin(2 * Math.PI * frequency * t) * volume * Math.exp(-t * 2);
+      view.setInt16(44 + i * 2, sample * 32767, true);
+    }
+    
+    const blob = new Blob([buffer], { type: 'audio/wav' });
+    return URL.createObjectURL(blob);
+  };
+
+  // Create explosion sound with multiple frequency layers
+  const createExplosionSound = () => {
+    const sampleRate = 8000;
+    const duration = 2.0; // 2 seconds
+    const samples = Math.floor(sampleRate * duration);
+    const buffer = new ArrayBuffer(44 + samples * 2);
+    const view = new DataView(buffer);
+    
+    // WAV header (same as before)
+    const writeString = (offset: number, string: string) => {
+      for (let i = 0; i < string.length; i++) {
+        view.setUint8(offset + i, string.charCodeAt(i));
+      }
+    };
+    
+    writeString(0, 'RIFF');
+    view.setUint32(4, buffer.byteLength - 8, true);
+    writeString(8, 'WAVE');
+    writeString(12, 'fmt ');
+    view.setUint32(16, 16, true);
+    view.setUint16(20, 1, true);
+    view.setUint16(22, 1, true);
+    view.setUint32(24, sampleRate, true);
+    view.setUint32(28, sampleRate * 2, true);
+    view.setUint16(32, 2, true);
+    view.setUint16(34, 16, true);
+    writeString(36, 'data');
+    view.setUint32(40, samples * 2, true);
+    
+    // Generate explosion audio data
+    for (let i = 0; i < samples; i++) {
+      const t = i / sampleRate;
+      
+      // Multiple frequency layers for realistic explosion
+      const noise = (Math.random() * 2 - 1) * Math.exp(-t * 3) * 0.6; // White noise
+      const lowRumble = Math.sin(2 * Math.PI * 60 * t) * Math.exp(-t * 1) * 0.4; // Low rumble
+      const midCrack = Math.sin(2 * Math.PI * 200 * t) * Math.exp(-t * 2) * 0.3; // Mid crack
+      const highDebris = Math.sin(2 * Math.PI * 800 * t) * Math.exp(-t * 4) * 0.2; // High debris
+      
+      let sample = noise + lowRumble + midCrack + highDebris;
+      
+      // Apply envelope and distortion
+      sample *= Math.exp(-t * 1.5); // Overall decay
+      sample = Math.tanh(sample * 2); // Saturation distortion
+      
+      view.setInt16(44 + i * 2, sample * 32767 * 0.8, true);
+    }
+    
+    const blob = new Blob([buffer], { type: 'audio/wav' });
+    return URL.createObjectURL(blob);
+  };
+
+  // Initialize audio elements
+  useEffect(() => {
+    // Create tick sound (1000Hz, 0.1s)
+    const tickDataURL = createAudioDataURL(1000, 0.1, 0.3);
+    tickAudioRef.current = new Audio(tickDataURL);
+    tickAudioRef.current.preload = 'auto';
+    
+    // Create complex explosion sound
+    const explosionDataURL = createExplosionSound();
+    explosionAudioRef.current = new Audio(explosionDataURL);
+    explosionAudioRef.current.preload = 'auto';
+    
+    return () => {
+      if (tickAudioRef.current) {
+        URL.revokeObjectURL(tickAudioRef.current.src);
+      }
+      if (explosionAudioRef.current) {
+        URL.revokeObjectURL(explosionAudioRef.current.src);
+      }
+    };
+  }, []);
+
+  // Simple HTML5 Audio unlock for iPad
   const unlockAudio = async () => {
     try {
-      if (!audioContextRef.current) {
-        audioContextRef.current = new (window.AudioContext ||
-          (window as any).webkitAudioContext)();
-      }
-
-      // Force resume AudioContext multiple times (iOS can be stubborn)
-      if (audioContextRef.current.state === "suspended") {
-        await audioContextRef.current.resume();
-        // Wait and try again if still suspended
-        if (audioContextRef.current.state === "suspended") {
-          await new Promise((resolve) => setTimeout(resolve, 100));
-          await audioContextRef.current.resume();
+      // Try to play a silent audio element to unlock audio
+      if (tickAudioRef.current) {
+        tickAudioRef.current.volume = 0;
+        const playPromise = tickAudioRef.current.play();
+        if (playPromise) {
+          await playPromise;
+          tickAudioRef.current.pause();
+          tickAudioRef.current.currentTime = 0;
         }
       }
-
-      // Play multiple unlock sounds with different approaches
-      const unlockPromises = [];
-
-      // Method 1: Silent oscillator
-      for (let i = 0; i < 3; i++) {
-        const oscillator = audioContextRef.current.createOscillator();
-        const gainNode = audioContextRef.current.createGain();
-
-        oscillator.connect(gainNode);
-        gainNode.connect(audioContextRef.current.destination);
-
-        gainNode.gain.value = i === 0 ? 0 : 0.001; // First silent, others barely audible
-        oscillator.frequency.value = 440 + i * 100;
-
-        const startTime = audioContextRef.current.currentTime + i * 0.01;
-        oscillator.start(startTime);
-        oscillator.stop(startTime + 0.01);
-
-        unlockPromises.push(
-          new Promise((resolve) => {
-            oscillator.onended = resolve;
-          })
-        );
-      }
-
-      // Method 2: Buffer source with tiny sound
-      const buffer = audioContextRef.current.createBuffer(
-        1,
-        1,
-        audioContextRef.current.sampleRate
-      );
-      const source = audioContextRef.current.createBufferSource();
-      const gainNode = audioContextRef.current.createGain();
-
-      source.buffer = buffer;
-      source.connect(gainNode);
-      gainNode.connect(audioContextRef.current.destination);
-      gainNode.gain.value = 0.001;
-      source.start();
-
-      await Promise.all(unlockPromises);
-
-      // Final check and force resume again
-      if (audioContextRef.current.state === "suspended") {
-        await audioContextRef.current.resume();
-      }
-
+      
       setAudioUnlocked(true);
-      console.log("Audio unlocked successfully for iPad");
+      console.log("HTML5 Audio unlocked for iPad");
     } catch (error) {
       console.error("Audio unlock failed:", error);
-      // Still set as unlocked to try playing sounds
       setAudioUnlocked(true);
     }
   };
@@ -134,163 +196,38 @@ function App() {
     await unlockAudio();
 
     try {
-      const context = await getAudioContext();
-      const oscillator = context.createOscillator();
-      const gainNode = context.createGain();
-
-      oscillator.connect(gainNode);
-      gainNode.connect(context.destination);
-
-      oscillator.frequency.value = 800;
-      oscillator.type = "sine";
-      gainNode.gain.value = 0.2;
-
-      oscillator.start();
-      oscillator.stop(context.currentTime + 0.2);
-
+      if (tickAudioRef.current) {
+        tickAudioRef.current.volume = 0.3;
+        tickAudioRef.current.currentTime = 0;
+        await tickAudioRef.current.play();
+      }
+      
       setAudioTested(true);
-      console.log("Audio test completed");
+      console.log("Audio test completed with HTML5 Audio");
     } catch (error) {
       console.warn("Audio test failed:", error);
     }
   };
 
-  const getAudioContext = async () => {
-    if (
-      !audioContextRef.current ||
-      audioContextRef.current.state === "closed"
-    ) {
-      audioContextRef.current = new (window.AudioContext ||
-        (window as any).webkitAudioContext)();
-    }
-
-    // Always try to resume before playing (iPad requirement)
-    if (audioContextRef.current.state === "suspended") {
-      try {
-        await audioContextRef.current.resume();
-      } catch (error) {
-        console.warn("Could not resume audio context:", error);
-      }
-    }
-
-    return audioContextRef.current;
-  };
-
   const playTickSound = async () => {
-    if (!audioUnlocked) return;
+    if (!audioUnlocked || !tickAudioRef.current) return;
 
     try {
-      const context = await getAudioContext();
-      const oscillator = context.createOscillator();
-      const gainNode = context.createGain();
-
-      oscillator.connect(gainNode);
-      gainNode.connect(context.destination);
-
-      oscillator.frequency.value = 1000;
-      oscillator.type = "square";
-      gainNode.gain.value = 0.05;
-
-      oscillator.start();
-      oscillator.stop(context.currentTime + 0.1);
+      tickAudioRef.current.volume = 0.3;
+      tickAudioRef.current.currentTime = 0;
+      await tickAudioRef.current.play();
     } catch (error) {
       console.warn("Tick sound failed:", error);
     }
   };
 
   const playFinalAlarm = async () => {
-    if (!audioUnlocked) return;
+    if (!audioUnlocked || !explosionAudioRef.current) return;
 
     try {
-      const context = await getAudioContext();
-
-      // Create massive explosion sound with distortion and deep bass
-      const createMassiveExplosion = () => {
-        const bufferSize = context.sampleRate * 4; // 4 seconds for longer explosion
-        const buffer = context.createBuffer(1, bufferSize, context.sampleRate);
-        const data = buffer.getChannelData(0);
-
-        for (let i = 0; i < bufferSize; i++) {
-          const time = i / context.sampleRate;
-
-          // MASSIVE initial blast with heavy distortion
-          const blastDecay = Math.exp(-time * 2);
-          const heavyNoise = (Math.random() * 2 - 1) * blastDecay * 0.8;
-
-          // DEEP sub-bass rumble (20-40Hz) - feel it in your chest
-          const subBassFreq = 25 + 15 * Math.sin(time * 0.5); // Wobbling sub-bass
-          const subBass =
-            Math.sin(2 * Math.PI * subBassFreq * time) *
-            Math.exp(-time * 0.5) *
-            0.7;
-
-          // Low frequency thunder roll (40-80Hz)
-          const thunderFreq = 60 * (1 - time * 0.2);
-          const thunder =
-            Math.sin(2 * Math.PI * thunderFreq * time) *
-            Math.exp(-time * 0.8) *
-            0.6;
-
-          // Mid-range destruction (100-300Hz)
-          const destructionFreq = 200 * (1 - time * 0.6);
-          const destruction =
-            Math.sin(2 * Math.PI * destructionFreq * time) *
-            Math.exp(-time * 1.5) *
-            0.5;
-
-          // High frequency debris and crackling (500-2000Hz)
-          const debrisFreq = 1000 * (1 - time * 0.9);
-          const debris =
-            Math.sin(2 * Math.PI * debrisFreq * time) *
-            Math.exp(-time * 3) *
-            0.4;
-
-          // Combine all layers
-          let sample = heavyNoise + subBass + thunder + destruction + debris;
-
-          // AGGRESSIVE DISTORTION - clip and overdrive
-          sample *= 1.8; // Overdrive
-          if (sample > 0.7) sample = 0.7 + (sample - 0.7) * 0.1; // Soft clipping
-          if (sample < -0.7) sample = -0.7 + (sample + 0.7) * 0.1;
-
-          // Add some digital-style distortion for extra aggression
-          if (Math.abs(sample) > 0.3) {
-            sample = sample > 0 ? sample * 1.2 : sample * 1.2;
-          }
-
-          data[i] = sample;
-
-          // Overall envelope - longer decay for massive explosion
-          data[i] *= Math.exp(-time * 0.8);
-        }
-
-        return buffer;
-      };
-
-      // Play the massive explosion with additional processing
-      const explosionBuffer = createMassiveExplosion();
-      const source = context.createBufferSource();
-      const gainNode = context.createGain();
-
-      // Add some filter sweep for extra drama
-      const filter = context.createBiquadFilter();
-      filter.type = "lowpass";
-      filter.frequency.setValueAtTime(8000, context.currentTime);
-      filter.frequency.exponentialRampToValueAtTime(
-        200,
-        context.currentTime + 2
-      );
-
-      source.buffer = explosionBuffer;
-      source.connect(filter);
-      filter.connect(gainNode);
-      gainNode.connect(context.destination);
-
-      // LOUD volume for maximum impact
-      gainNode.gain.value = 0.6;
-
-      // Start the massive explosion
-      source.start();
+      explosionAudioRef.current.volume = 0.8;
+      explosionAudioRef.current.currentTime = 0;
+      await explosionAudioRef.current.play();
     } catch (error) {
       console.warn("Explosion sound failed:", error);
     }
