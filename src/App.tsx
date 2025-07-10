@@ -7,6 +7,7 @@ function App() {
   const [selectedTime, setSelectedTime] = useState(60);
   const [prevTimeLeft, setPrevTimeLeft] = useState(60);
   const [audioUnlocked, setAudioUnlocked] = useState(false);
+  const [audioTested, setAudioTested] = useState(false);
   const intervalRef = useRef<number | null>(null);
   const audioContextRef = useRef<AudioContext | null>(null);
 
@@ -54,34 +55,107 @@ function App() {
     setPrevTimeLeft(timeLeft);
   }, [timeLeft]);
 
-  // Initialize AudioContext and unlock audio on first user interaction
+  // More aggressive audio unlock for iPad
   const unlockAudio = async () => {
-    if (!audioContextRef.current) {
-      audioContextRef.current = new (window.AudioContext ||
-        (window as any).webkitAudioContext)();
+    try {
+      if (!audioContextRef.current) {
+        audioContextRef.current = new (window.AudioContext ||
+          (window as any).webkitAudioContext)();
+      }
+
+      // Force resume AudioContext multiple times (iOS can be stubborn)
+      if (audioContextRef.current.state === "suspended") {
+        await audioContextRef.current.resume();
+        // Wait and try again if still suspended
+        if (audioContextRef.current.state === "suspended") {
+          await new Promise((resolve) => setTimeout(resolve, 100));
+          await audioContextRef.current.resume();
+        }
+      }
+
+      // Play multiple unlock sounds with different approaches
+      const unlockPromises = [];
+
+      // Method 1: Silent oscillator
+      for (let i = 0; i < 3; i++) {
+        const oscillator = audioContextRef.current.createOscillator();
+        const gainNode = audioContextRef.current.createGain();
+
+        oscillator.connect(gainNode);
+        gainNode.connect(audioContextRef.current.destination);
+
+        gainNode.gain.value = i === 0 ? 0 : 0.001; // First silent, others barely audible
+        oscillator.frequency.value = 440 + i * 100;
+
+        const startTime = audioContextRef.current.currentTime + i * 0.01;
+        oscillator.start(startTime);
+        oscillator.stop(startTime + 0.01);
+
+        unlockPromises.push(
+          new Promise((resolve) => {
+            oscillator.onended = resolve;
+          })
+        );
+      }
+
+      // Method 2: Buffer source with tiny sound
+      const buffer = audioContextRef.current.createBuffer(
+        1,
+        1,
+        audioContextRef.current.sampleRate
+      );
+      const source = audioContextRef.current.createBufferSource();
+      const gainNode = audioContextRef.current.createGain();
+
+      source.buffer = buffer;
+      source.connect(gainNode);
+      gainNode.connect(audioContextRef.current.destination);
+      gainNode.gain.value = 0.001;
+      source.start();
+
+      await Promise.all(unlockPromises);
+
+      // Final check and force resume again
+      if (audioContextRef.current.state === "suspended") {
+        await audioContextRef.current.resume();
+      }
+
+      setAudioUnlocked(true);
+      console.log("Audio unlocked successfully for iPad");
+    } catch (error) {
+      console.error("Audio unlock failed:", error);
+      // Still set as unlocked to try playing sounds
+      setAudioUnlocked(true);
     }
-
-    // Resume AudioContext if suspended (required for iOS)
-    if (audioContextRef.current.state === "suspended") {
-      await audioContextRef.current.resume();
-    }
-
-    // Play a silent sound to unlock audio
-    const oscillator = audioContextRef.current.createOscillator();
-    const gainNode = audioContextRef.current.createGain();
-
-    oscillator.connect(gainNode);
-    gainNode.connect(audioContextRef.current.destination);
-
-    gainNode.gain.value = 0; // Silent
-    oscillator.frequency.value = 440;
-    oscillator.start();
-    oscillator.stop(audioContextRef.current.currentTime + 0.01);
-
-    setAudioUnlocked(true);
   };
 
-  const getAudioContext = () => {
+  // Test audio with audible sound for iPad users
+  const testAudio = async () => {
+    await unlockAudio();
+
+    try {
+      const context = await getAudioContext();
+      const oscillator = context.createOscillator();
+      const gainNode = context.createGain();
+
+      oscillator.connect(gainNode);
+      gainNode.connect(context.destination);
+
+      oscillator.frequency.value = 800;
+      oscillator.type = "sine";
+      gainNode.gain.value = 0.2;
+
+      oscillator.start();
+      oscillator.stop(context.currentTime + 0.2);
+
+      setAudioTested(true);
+      console.log("Audio test completed");
+    } catch (error) {
+      console.warn("Audio test failed:", error);
+    }
+  };
+
+  const getAudioContext = async () => {
     if (
       !audioContextRef.current ||
       audioContextRef.current.state === "closed"
@@ -89,114 +163,137 @@ function App() {
       audioContextRef.current = new (window.AudioContext ||
         (window as any).webkitAudioContext)();
     }
+
+    // Always try to resume before playing (iPad requirement)
+    if (audioContextRef.current.state === "suspended") {
+      try {
+        await audioContextRef.current.resume();
+      } catch (error) {
+        console.warn("Could not resume audio context:", error);
+      }
+    }
+
     return audioContextRef.current;
   };
 
-  const playTickSound = () => {
+  const playTickSound = async () => {
     if (!audioUnlocked) return;
 
-    const context = getAudioContext();
-    const oscillator = context.createOscillator();
-    const gainNode = context.createGain();
+    try {
+      const context = await getAudioContext();
+      const oscillator = context.createOscillator();
+      const gainNode = context.createGain();
 
-    oscillator.connect(gainNode);
-    gainNode.connect(context.destination);
+      oscillator.connect(gainNode);
+      gainNode.connect(context.destination);
 
-    oscillator.frequency.value = 1000;
-    oscillator.type = "square";
-    gainNode.gain.value = 0.05;
+      oscillator.frequency.value = 1000;
+      oscillator.type = "square";
+      gainNode.gain.value = 0.05;
 
-    oscillator.start();
-    oscillator.stop(context.currentTime + 0.1);
+      oscillator.start();
+      oscillator.stop(context.currentTime + 0.1);
+    } catch (error) {
+      console.warn("Tick sound failed:", error);
+    }
   };
 
-  const playFinalAlarm = () => {
+  const playFinalAlarm = async () => {
     if (!audioUnlocked) return;
 
-    const context = getAudioContext();
+    try {
+      const context = await getAudioContext();
 
-    // Create massive explosion sound with distortion and deep bass
-    const createMassiveExplosion = () => {
-      const bufferSize = context.sampleRate * 4; // 4 seconds for longer explosion
-      const buffer = context.createBuffer(1, bufferSize, context.sampleRate);
-      const data = buffer.getChannelData(0);
+      // Create massive explosion sound with distortion and deep bass
+      const createMassiveExplosion = () => {
+        const bufferSize = context.sampleRate * 4; // 4 seconds for longer explosion
+        const buffer = context.createBuffer(1, bufferSize, context.sampleRate);
+        const data = buffer.getChannelData(0);
 
-      for (let i = 0; i < bufferSize; i++) {
-        const time = i / context.sampleRate;
+        for (let i = 0; i < bufferSize; i++) {
+          const time = i / context.sampleRate;
 
-        // MASSIVE initial blast with heavy distortion
-        const blastDecay = Math.exp(-time * 2);
-        const heavyNoise = (Math.random() * 2 - 1) * blastDecay * 0.8;
+          // MASSIVE initial blast with heavy distortion
+          const blastDecay = Math.exp(-time * 2);
+          const heavyNoise = (Math.random() * 2 - 1) * blastDecay * 0.8;
 
-        // DEEP sub-bass rumble (20-40Hz) - feel it in your chest
-        const subBassFreq = 25 + 15 * Math.sin(time * 0.5); // Wobbling sub-bass
-        const subBass =
-          Math.sin(2 * Math.PI * subBassFreq * time) *
-          Math.exp(-time * 0.5) *
-          0.7;
+          // DEEP sub-bass rumble (20-40Hz) - feel it in your chest
+          const subBassFreq = 25 + 15 * Math.sin(time * 0.5); // Wobbling sub-bass
+          const subBass =
+            Math.sin(2 * Math.PI * subBassFreq * time) *
+            Math.exp(-time * 0.5) *
+            0.7;
 
-        // Low frequency thunder roll (40-80Hz)
-        const thunderFreq = 60 * (1 - time * 0.2);
-        const thunder =
-          Math.sin(2 * Math.PI * thunderFreq * time) *
-          Math.exp(-time * 0.8) *
-          0.6;
+          // Low frequency thunder roll (40-80Hz)
+          const thunderFreq = 60 * (1 - time * 0.2);
+          const thunder =
+            Math.sin(2 * Math.PI * thunderFreq * time) *
+            Math.exp(-time * 0.8) *
+            0.6;
 
-        // Mid-range destruction (100-300Hz)
-        const destructionFreq = 200 * (1 - time * 0.6);
-        const destruction =
-          Math.sin(2 * Math.PI * destructionFreq * time) *
-          Math.exp(-time * 1.5) *
-          0.5;
+          // Mid-range destruction (100-300Hz)
+          const destructionFreq = 200 * (1 - time * 0.6);
+          const destruction =
+            Math.sin(2 * Math.PI * destructionFreq * time) *
+            Math.exp(-time * 1.5) *
+            0.5;
 
-        // High frequency debris and crackling (500-2000Hz)
-        const debrisFreq = 1000 * (1 - time * 0.9);
-        const debris =
-          Math.sin(2 * Math.PI * debrisFreq * time) * Math.exp(-time * 3) * 0.4;
+          // High frequency debris and crackling (500-2000Hz)
+          const debrisFreq = 1000 * (1 - time * 0.9);
+          const debris =
+            Math.sin(2 * Math.PI * debrisFreq * time) *
+            Math.exp(-time * 3) *
+            0.4;
 
-        // Combine all layers
-        let sample = heavyNoise + subBass + thunder + destruction + debris;
+          // Combine all layers
+          let sample = heavyNoise + subBass + thunder + destruction + debris;
 
-        // AGGRESSIVE DISTORTION - clip and overdrive
-        sample *= 1.8; // Overdrive
-        if (sample > 0.7) sample = 0.7 + (sample - 0.7) * 0.1; // Soft clipping
-        if (sample < -0.7) sample = -0.7 + (sample + 0.7) * 0.1;
+          // AGGRESSIVE DISTORTION - clip and overdrive
+          sample *= 1.8; // Overdrive
+          if (sample > 0.7) sample = 0.7 + (sample - 0.7) * 0.1; // Soft clipping
+          if (sample < -0.7) sample = -0.7 + (sample + 0.7) * 0.1;
 
-        // Add some digital-style distortion for extra aggression
-        if (Math.abs(sample) > 0.3) {
-          sample = sample > 0 ? sample * 1.2 : sample * 1.2;
+          // Add some digital-style distortion for extra aggression
+          if (Math.abs(sample) > 0.3) {
+            sample = sample > 0 ? sample * 1.2 : sample * 1.2;
+          }
+
+          data[i] = sample;
+
+          // Overall envelope - longer decay for massive explosion
+          data[i] *= Math.exp(-time * 0.8);
         }
 
-        data[i] = sample;
+        return buffer;
+      };
 
-        // Overall envelope - longer decay for massive explosion
-        data[i] *= Math.exp(-time * 0.8);
-      }
+      // Play the massive explosion with additional processing
+      const explosionBuffer = createMassiveExplosion();
+      const source = context.createBufferSource();
+      const gainNode = context.createGain();
 
-      return buffer;
-    };
+      // Add some filter sweep for extra drama
+      const filter = context.createBiquadFilter();
+      filter.type = "lowpass";
+      filter.frequency.setValueAtTime(8000, context.currentTime);
+      filter.frequency.exponentialRampToValueAtTime(
+        200,
+        context.currentTime + 2
+      );
 
-    // Play the massive explosion with additional processing
-    const explosionBuffer = createMassiveExplosion();
-    const source = context.createBufferSource();
-    const gainNode = context.createGain();
+      source.buffer = explosionBuffer;
+      source.connect(filter);
+      filter.connect(gainNode);
+      gainNode.connect(context.destination);
 
-    // Add some filter sweep for extra drama
-    const filter = context.createBiquadFilter();
-    filter.type = "lowpass";
-    filter.frequency.setValueAtTime(8000, context.currentTime);
-    filter.frequency.exponentialRampToValueAtTime(200, context.currentTime + 2);
+      // LOUD volume for maximum impact
+      gainNode.gain.value = 0.6;
 
-    source.buffer = explosionBuffer;
-    source.connect(filter);
-    filter.connect(gainNode);
-    gainNode.connect(context.destination);
-
-    // LOUD volume for maximum impact
-    gainNode.gain.value = 0.6;
-
-    // Start the massive explosion
-    source.start();
+      // Start the massive explosion
+      source.start();
+    } catch (error) {
+      console.warn("Explosion sound failed:", error);
+    }
   };
 
   const startStop = async () => {
@@ -243,6 +340,14 @@ function App() {
   return (
     <div className="stopwatch-container">
       {!audioUnlocked && <div className="audio-notice">🔊</div>}
+
+      {audioUnlocked && !audioTested && (
+        <div className="audio-test-notice">
+          <button className="audio-test-btn" onClick={testAudio}>
+            🔊 Test Audio (Recommended for iPad)
+          </button>
+        </div>
+      )}
 
       <div className="time-presets">
         {timePresets.map((preset) => (
