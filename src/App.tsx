@@ -12,6 +12,7 @@ function App() {
   const tickAudioPoolRef = useRef<HTMLAudioElement[]>([]);
   const explosionAudioRef = useRef<HTMLAudioElement | null>(null);
   const tickAudioIndexRef = useRef(0);
+  const tickDataURLRef = useRef<string>("");
 
   const timePresets = [
     { label: "5s", seconds: 5 },
@@ -35,6 +36,7 @@ function App() {
           }
           // Play tick sound for last 10 seconds
           if (prev <= 10) {
+            console.log("Timer at", prev, "seconds - calling playTickSound()");
             playTickSound();
           }
           return prev - 1;
@@ -150,12 +152,17 @@ function App() {
 
   // Initialize audio elements
   useEffect(() => {
-    // Create tick sound pool (5 audio elements for iPad compatibility)
+    // Create tick sound data URL and store reference
     const tickDataURL = createAudioDataURL(1000, 0.1, 0.3);
+    tickDataURLRef.current = tickDataURL;
+    
+    // Create tick sound pool (5 audio elements for iPad compatibility)
     tickAudioPoolRef.current = [];
     for (let i = 0; i < 5; i++) {
       const audio = new Audio(tickDataURL);
       audio.preload = 'auto';
+      // Force load immediately
+      audio.load();
       tickAudioPoolRef.current.push(audio);
     }
     
@@ -163,6 +170,7 @@ function App() {
     const explosionDataURL = createExplosionSound();
     explosionAudioRef.current = new Audio(explosionDataURL);
     explosionAudioRef.current.preload = 'auto';
+    explosionAudioRef.current.load();
     
     return () => {
       tickAudioPoolRef.current.forEach(audio => {
@@ -170,6 +178,9 @@ function App() {
       });
       if (explosionAudioRef.current) {
         URL.revokeObjectURL(explosionAudioRef.current.src);
+      }
+      if (tickDataURLRef.current) {
+        URL.revokeObjectURL(tickDataURLRef.current);
       }
     };
   }, []);
@@ -217,30 +228,55 @@ function App() {
   };
 
   const playTickSound = async () => {
-    if (!audioUnlocked || tickAudioPoolRef.current.length === 0) return;
+    if (!audioUnlocked) {
+      console.log("Tick sound blocked: audioUnlocked =", audioUnlocked);
+      return;
+    }
 
+    console.log("Timer requesting tick sound");
+
+    // Try both approaches for maximum iPad compatibility
     try {
-      // Use round-robin selection of audio elements to avoid timing conflicts
-      const currentIndex = tickAudioIndexRef.current % tickAudioPoolRef.current.length;
-      const audio = tickAudioPoolRef.current[currentIndex];
-      
-      // Reset audio to beginning and set volume
-      audio.currentTime = 0;
-      audio.volume = 0.3;
-      
-      // Play the audio (don't await to avoid blocking)
-      const playPromise = audio.play();
-      if (playPromise) {
-        playPromise.catch(error => {
-          console.warn("Tick sound play failed:", error);
-        });
+      // Approach 1: Fresh audio element (most reliable for iPad)
+      if (tickDataURLRef.current) {
+        const freshAudio = new Audio(tickDataURLRef.current);
+        freshAudio.volume = 0.3;
+        
+        const playPromise = freshAudio.play();
+        if (playPromise) {
+          await playPromise;
+          console.log("Fresh audio tick played successfully");
+          return; // Success, exit early
+        }
       }
-      
-      // Move to next audio element for next play
-      tickAudioIndexRef.current = (tickAudioIndexRef.current + 1) % tickAudioPoolRef.current.length;
-      
     } catch (error) {
-      console.warn("Tick sound failed:", error);
+      console.warn("Fresh audio approach failed:", error);
+    }
+
+    // Approach 2: Pool fallback
+    try {
+      if (tickAudioPoolRef.current.length > 0) {
+        const currentIndex = tickAudioIndexRef.current % tickAudioPoolRef.current.length;
+        const audio = tickAudioPoolRef.current[currentIndex];
+        
+        console.log("Fallback to pool, index:", currentIndex, "readyState:", audio.readyState);
+        
+        // Reset audio to beginning and set volume
+        audio.currentTime = 0;
+        audio.volume = 0.3;
+        
+        // Play the audio
+        const playPromise = audio.play();
+        if (playPromise) {
+          await playPromise;
+          console.log("Pool audio tick played successfully");
+        }
+        
+        // Move to next audio element for next play
+        tickAudioIndexRef.current = (tickAudioIndexRef.current + 1) % tickAudioPoolRef.current.length;
+      }
+    } catch (error) {
+      console.error("Both tick sound approaches failed:", error);
     }
   };
 
