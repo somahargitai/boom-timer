@@ -9,8 +9,9 @@ function App() {
   const [audioUnlocked, setAudioUnlocked] = useState(false);
   const [audioTested, setAudioTested] = useState(false);
   const intervalRef = useRef<number | null>(null);
-  const tickAudioRef = useRef<HTMLAudioElement | null>(null);
+  const tickAudioPoolRef = useRef<HTMLAudioElement[]>([]);
   const explosionAudioRef = useRef<HTMLAudioElement | null>(null);
+  const tickAudioIndexRef = useRef(0);
 
   const timePresets = [
     { label: "5s", seconds: 5 },
@@ -149,10 +150,14 @@ function App() {
 
   // Initialize audio elements
   useEffect(() => {
-    // Create tick sound (1000Hz, 0.1s)
+    // Create tick sound pool (5 audio elements for iPad compatibility)
     const tickDataURL = createAudioDataURL(1000, 0.1, 0.3);
-    tickAudioRef.current = new Audio(tickDataURL);
-    tickAudioRef.current.preload = 'auto';
+    tickAudioPoolRef.current = [];
+    for (let i = 0; i < 5; i++) {
+      const audio = new Audio(tickDataURL);
+      audio.preload = 'auto';
+      tickAudioPoolRef.current.push(audio);
+    }
     
     // Create complex explosion sound
     const explosionDataURL = createExplosionSound();
@@ -160,9 +165,9 @@ function App() {
     explosionAudioRef.current.preload = 'auto';
     
     return () => {
-      if (tickAudioRef.current) {
-        URL.revokeObjectURL(tickAudioRef.current.src);
-      }
+      tickAudioPoolRef.current.forEach(audio => {
+        URL.revokeObjectURL(audio.src);
+      });
       if (explosionAudioRef.current) {
         URL.revokeObjectURL(explosionAudioRef.current.src);
       }
@@ -173,13 +178,14 @@ function App() {
   const unlockAudio = async () => {
     try {
       // Try to play a silent audio element to unlock audio
-      if (tickAudioRef.current) {
-        tickAudioRef.current.volume = 0;
-        const playPromise = tickAudioRef.current.play();
+      if (tickAudioPoolRef.current.length > 0) {
+        const audio = tickAudioPoolRef.current[0];
+        audio.volume = 0;
+        const playPromise = audio.play();
         if (playPromise) {
           await playPromise;
-          tickAudioRef.current.pause();
-          tickAudioRef.current.currentTime = 0;
+          audio.pause();
+          audio.currentTime = 0;
         }
       }
       
@@ -196,10 +202,11 @@ function App() {
     await unlockAudio();
 
     try {
-      if (tickAudioRef.current) {
-        tickAudioRef.current.volume = 0.3;
-        tickAudioRef.current.currentTime = 0;
-        await tickAudioRef.current.play();
+      if (tickAudioPoolRef.current.length > 0) {
+        const audio = tickAudioPoolRef.current[0];
+        audio.volume = 0.3;
+        audio.currentTime = 0;
+        await audio.play();
       }
       
       setAudioTested(true);
@@ -210,12 +217,28 @@ function App() {
   };
 
   const playTickSound = async () => {
-    if (!audioUnlocked || !tickAudioRef.current) return;
+    if (!audioUnlocked || tickAudioPoolRef.current.length === 0) return;
 
     try {
-      tickAudioRef.current.volume = 0.3;
-      tickAudioRef.current.currentTime = 0;
-      await tickAudioRef.current.play();
+      // Use round-robin selection of audio elements to avoid timing conflicts
+      const currentIndex = tickAudioIndexRef.current % tickAudioPoolRef.current.length;
+      const audio = tickAudioPoolRef.current[currentIndex];
+      
+      // Reset audio to beginning and set volume
+      audio.currentTime = 0;
+      audio.volume = 0.3;
+      
+      // Play the audio (don't await to avoid blocking)
+      const playPromise = audio.play();
+      if (playPromise) {
+        playPromise.catch(error => {
+          console.warn("Tick sound play failed:", error);
+        });
+      }
+      
+      // Move to next audio element for next play
+      tickAudioIndexRef.current = (tickAudioIndexRef.current + 1) % tickAudioPoolRef.current.length;
+      
     } catch (error) {
       console.warn("Tick sound failed:", error);
     }
