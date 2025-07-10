@@ -6,7 +6,9 @@ function App() {
   const [isRunning, setIsRunning] = useState(false);
   const [selectedTime, setSelectedTime] = useState(60);
   const [prevTimeLeft, setPrevTimeLeft] = useState(60);
+  const [audioUnlocked, setAudioUnlocked] = useState(false);
   const intervalRef = useRef<number | null>(null);
+  const audioContextRef = useRef<AudioContext | null>(null);
 
   const timePresets = [
     { label: "5s", seconds: 5 },
@@ -52,9 +54,48 @@ function App() {
     setPrevTimeLeft(timeLeft);
   }, [timeLeft]);
 
+  // Initialize AudioContext and unlock audio on first user interaction
+  const unlockAudio = async () => {
+    if (!audioContextRef.current) {
+      audioContextRef.current = new (window.AudioContext ||
+        (window as any).webkitAudioContext)();
+    }
+
+    // Resume AudioContext if suspended (required for iOS)
+    if (audioContextRef.current.state === "suspended") {
+      await audioContextRef.current.resume();
+    }
+
+    // Play a silent sound to unlock audio
+    const oscillator = audioContextRef.current.createOscillator();
+    const gainNode = audioContextRef.current.createGain();
+
+    oscillator.connect(gainNode);
+    gainNode.connect(audioContextRef.current.destination);
+
+    gainNode.gain.value = 0; // Silent
+    oscillator.frequency.value = 440;
+    oscillator.start();
+    oscillator.stop(audioContextRef.current.currentTime + 0.01);
+
+    setAudioUnlocked(true);
+  };
+
+  const getAudioContext = () => {
+    if (
+      !audioContextRef.current ||
+      audioContextRef.current.state === "closed"
+    ) {
+      audioContextRef.current = new (window.AudioContext ||
+        (window as any).webkitAudioContext)();
+    }
+    return audioContextRef.current;
+  };
+
   const playTickSound = () => {
-    const context = new (window.AudioContext ||
-      (window as any).webkitAudioContext)();
+    if (!audioUnlocked) return;
+
+    const context = getAudioContext();
     const oscillator = context.createOscillator();
     const gainNode = context.createGain();
 
@@ -70,8 +111,9 @@ function App() {
   };
 
   const playFinalAlarm = () => {
-    const context = new (window.AudioContext ||
-      (window as any).webkitAudioContext)();
+    if (!audioUnlocked) return;
+
+    const context = getAudioContext();
 
     // Create massive explosion sound with distortion and deep bass
     const createMassiveExplosion = () => {
@@ -157,7 +199,10 @@ function App() {
     source.start();
   };
 
-  const startStop = () => {
+  const startStop = async () => {
+    if (!audioUnlocked) {
+      await unlockAudio();
+    }
     setIsRunning(!isRunning);
   };
 
@@ -167,7 +212,10 @@ function App() {
     setPrevTimeLeft(selectedTime);
   };
 
-  const selectTime = (seconds: number) => {
+  const selectTime = async (seconds: number) => {
+    if (!audioUnlocked) {
+      await unlockAudio();
+    }
     setSelectedTime(seconds);
     setTimeLeft(seconds);
     setPrevTimeLeft(seconds);
@@ -194,6 +242,8 @@ function App() {
 
   return (
     <div className="stopwatch-container">
+      {!audioUnlocked && <div className="audio-notice">🔊</div>}
+
       <div className="time-presets">
         {timePresets.map((preset) => (
           <button
