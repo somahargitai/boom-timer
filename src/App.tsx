@@ -346,18 +346,46 @@ function App() {
       )}
 
       <div className="time-presets">
+        <button
+          className="preset-btn"
+          style={{ fontWeight: 'bold', fontSize: '1.8rem', minWidth: 0, width: 48, padding: '0 0.5em' }}
+          onClick={async () => {
+            if (!audioUnlocked) await unlockAudio();
+            setSelectedTime((prev) => Math.max(0, prev - 60));
+            setTimeLeft((prev) => Math.max(0, prev - 60));
+            setPrevTimeLeft((prev) => Math.max(0, prev - 60));
+            setIsRunning(false);
+          }}
+          disabled={isRunning || selectedTime < 60}
+          aria-label="Minus 1 minute"
+        >
+          –
+        </button>
         {timePresets.map((preset) => (
           <button
             key={preset.seconds}
-            className={`preset-btn ${
-              selectedTime === preset.seconds ? "active" : ""
-            }`}
+            className={`preset-btn ${selectedTime === preset.seconds ? "active" : ""}`}
             onClick={() => selectTime(preset.seconds)}
             disabled={isRunning}
           >
             {preset.label}
           </button>
         ))}
+        <button
+          className="preset-btn"
+          style={{ fontWeight: 'bold', fontSize: '1.8rem', minWidth: 0, width: 48, padding: '0 0.5em' }}
+          onClick={async () => {
+            if (!audioUnlocked) await unlockAudio();
+            setSelectedTime((prev) => prev + 60);
+            setTimeLeft((prev) => prev + 60);
+            setPrevTimeLeft((prev) => prev + 60);
+            setIsRunning(false);
+          }}
+          disabled={isRunning}
+          aria-label="Plus 1 minute"
+        >
+          +
+        </button>
       </div>
 
       <div className="stopwatch">
