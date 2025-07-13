@@ -8,6 +8,7 @@ function App() {
   const [prevTimeLeft, setPrevTimeLeft] = useState(60);
   const [audioUnlocked, setAudioUnlocked] = useState(false);
   const [audioTested, setAudioTested] = useState(false);
+  const [debugLog, setDebugLog] = useState<string[]>([]);
   const intervalRef = useRef<number | null>(null);
   const tickAudioPoolRef = useRef<HTMLAudioElement[]>([]);
   const explosionAudioRef = useRef<HTMLAudioElement | null>(null);
@@ -36,7 +37,7 @@ function App() {
           }
           // Play tick sound for last 10 seconds
           if (prev <= 10) {
-            console.log("Timer at", prev, "seconds - calling playTickSound()");
+            addDebugLog(`Timer at ${prev} seconds - calling playTickSound()`);
             playTickSound();
           }
           return prev - 1;
@@ -58,6 +59,14 @@ function App() {
   useEffect(() => {
     setPrevTimeLeft(timeLeft);
   }, [timeLeft]);
+
+  // Add debug logging function
+  const addDebugLog = (message: string) => {
+    const timestamp = new Date().toLocaleTimeString();
+    const logEntry = `${timestamp}: ${message}`;
+    setDebugLog(prev => [...prev.slice(-4), logEntry]); // Keep last 5 entries
+    console.log(logEntry);
+  };
 
   // Create audio data URLs for iPad compatibility
   const createAudioDataURL = (frequency: number, duration: number, volume: number = 0.1) => {
@@ -229,11 +238,11 @@ function App() {
 
   const playTickSound = async () => {
     if (!audioUnlocked) {
-      console.log("Tick sound blocked: audioUnlocked =", audioUnlocked);
+      addDebugLog(`Tick blocked: audio=${audioUnlocked}`);
       return;
     }
 
-    console.log("Timer requesting tick sound");
+    addDebugLog("Tick sound requested");
 
     // Try both approaches for maximum iPad compatibility
     try {
@@ -245,12 +254,12 @@ function App() {
         const playPromise = freshAudio.play();
         if (playPromise) {
           await playPromise;
-          console.log("Fresh audio tick played successfully");
+          addDebugLog("✅ Fresh audio SUCCESS");
           return; // Success, exit early
         }
       }
     } catch (error) {
-      console.warn("Fresh audio approach failed:", error);
+      addDebugLog(`❌ Fresh audio FAILED: ${error}`);
     }
 
     // Approach 2: Pool fallback
@@ -259,7 +268,7 @@ function App() {
         const currentIndex = tickAudioIndexRef.current % tickAudioPoolRef.current.length;
         const audio = tickAudioPoolRef.current[currentIndex];
         
-        console.log("Fallback to pool, index:", currentIndex, "readyState:", audio.readyState);
+        addDebugLog(`Pool attempt: idx=${currentIndex} ready=${audio.readyState}`);
         
         // Reset audio to beginning and set volume
         audio.currentTime = 0;
@@ -269,14 +278,14 @@ function App() {
         const playPromise = audio.play();
         if (playPromise) {
           await playPromise;
-          console.log("Pool audio tick played successfully");
+          addDebugLog("✅ Pool audio SUCCESS");
         }
         
         // Move to next audio element for next play
         tickAudioIndexRef.current = (tickAudioIndexRef.current + 1) % tickAudioPoolRef.current.length;
       }
     } catch (error) {
-      console.error("Both tick sound approaches failed:", error);
+      addDebugLog(`❌ Both approaches FAILED: ${error}`);
     }
   };
 
@@ -342,6 +351,15 @@ function App() {
           <button className="audio-test-btn" onClick={testAudio}>
             🔊 Test Audio (Recommended for iPad)
           </button>
+        </div>
+      )}
+      
+      {debugLog.length > 0 && (
+        <div className="debug-log">
+          <div className="debug-title">🔍 Debug Log:</div>
+          {debugLog.map((log, index) => (
+            <div key={index} className="debug-entry">{log}</div>
+          ))}
         </div>
       )}
 
